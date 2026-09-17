@@ -1,6 +1,6 @@
 {
   "profile": "upp-1.3",
-  "version": 1,
+  "version": 2,
   "unsupported": {
     "sales_report": {
       "filters": [
@@ -138,11 +138,37 @@
     }
   },
   "tools": {
-    "unavailable": [
-      "availability_report",
-      "goods_in_transit",
-      "product_details",
-      "stock_reserves"
+    "available": [
+      "resolve_customer",
+      "resolve_warehouse",
+      "resolve_product",
+      "resolve_material",
+      "resolve_sales_channel",
+      "resolve_firm",
+      "resolve_cash",
+      "resolve_cost_article",
+      "resolve_operation",
+      "sales_report",
+      "top_products",
+      "customer_summary",
+      "stock_balance",
+      "cash_balance",
+      "cash_flow",
+      "receivables_balance",
+      "payables_balance",
+      "purchases_report",
+      "product_specification",
+      "specification_cost",
+      "specification_explode",
+      "specification_where_used",
+      "specification_versions",
+      "specification_list",
+      "production_output",
+      "production_consumption",
+      "production_document",
+      "event_log",
+      "object_history",
+      "find_document"
     ]
   },
   "resolvers": {

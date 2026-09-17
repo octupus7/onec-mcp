@@ -30,6 +30,15 @@ type recorded struct {
 
 func (f *fake1C) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Профиль с полным набором инструментов: тесты вызова проверяют разбор аргументов,
+		// а не opt-in профиля (он проверяется в profile_test.go). В записанные запросы
+		// health не попадает, иначе съехали бы индексы в fake.recorded.
+		if r.URL.Path == "/mcp/health" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, fullProfileHealth())
+			return
+		}
+
 		raw, _ := io.ReadAll(r.Body)
 
 		var body map[string]any
@@ -639,5 +648,57 @@ func TestStockReservesRejectsUnknownFilter(t *testing.T) {
 	}
 	if n := fake.count(); n != 0 {
 		t.Errorf("1C got %d requests, wanted none", n)
+	}
+}
+
+// fullProfileHealth — ответ health базы, подтвердившей все инструменты гейта.
+func fullProfileHealth() string {
+	names := make([]string, 0, len(GetTools()))
+	for _, tool := range GetTools() {
+		names = append(names, tool.Name)
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"status": "ok",
+		"capabilities": map[string]any{
+			"profile": "test",
+			"version": onec.CapabilitiesVersion,
+			"tools":   map[string]any{"available": names},
+		},
+	})
+
+	return string(payload)
+}
+
+// Инструмент, который база не подтвердила, отбивается на вызове и в 1С не уходит.
+func TestUnconfirmedToolRejectedOnCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/mcp/health" {
+			_, _ = io.WriteString(w, `{"status":"ok","capabilities":{"version":2,"tools":{"available":["stock_balance"]}}}`)
+			return
+		}
+		t.Errorf("unconfirmed tool reached 1C: %s", r.URL.Path)
+		_, _ = io.WriteString(w, `{"columns":[],"rows":[],"totals":{}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	client := onec.NewClient(onec.Settings{
+		BaseURL:       srv.URL,
+		Timeout:       2 * time.Second,
+		ReportTimeout: 2 * time.Second,
+	}, slog.New(slog.DiscardHandler))
+
+	cfg := &config.Config{}
+	cfg.Limits.MaxRows = 5000
+	cfg.Limits.ResolveLimit = 10
+	h := NewHandler(client, cfg, "", slog.New(slog.DiscardHandler))
+
+	res := callTool(t, h, ToolStockReserves, map[string]any{})
+	if !res.IsError {
+		t.Fatal("stock_reserves is not confirmed by the database but the call succeeded")
+	}
+	if len(res.Content) == 0 || !strings.Contains(res.Content[0].Text, "not available in this database") {
+		t.Errorf("unexpected rejection text: %+v", res.Content)
 	}
 }

@@ -513,9 +513,14 @@ infobase user does **not** need the "event log" administrative right.
 GET {base_url}/mcp/health
 ```
 
-Liveness plus — optionally — the **capabilities profile**: a machine-readable description of
-how this particular database differs from the common contract. The gate reads it and edits
-tool schemas before showing them to the model.
+Liveness plus the **capabilities profile**: a machine-readable description of which tools this
+particular database implements and how it differs from the common contract. The gate reads it
+and edits the tool list and schemas before showing them to the model.
+
+**The tool set is opt-in.** The gate carries the full set of tools, but a database sees only the
+tools it names in `tools.available`. A tool added to the gate later stays invisible to every
+database until that database implements it and lists it. A database that publishes no profile
+confirms nothing and gets no tools.
 
 Why the profile lives in 1C and not in the tenant record: the differences are produced by the
 accounting model of the database, and the code that relies on that model is the code that
@@ -528,7 +533,7 @@ made on the 1C side.
   "time": "2026-09-03T10:00:00",
   "capabilities": {
     "profile": "upp-1.3",
-    "version": 1,
+    "version": 2,
     "unsupported": {
       "cash_flow": { "filters": ["cost_article_ids"] },
       "stock_balance": { "filters": ["firm_ids", "product_status"], "group_by": ["firm"] },
@@ -537,7 +542,7 @@ made on the 1C side.
     "extra": {
       "production_consumption": { "group_by": ["cost_article"] }
     },
-    "tools": { "unavailable": ["availability_report", "goods_in_transit"] },
+    "tools": { "available": ["resolve_customer", "resolve_product", "stock_balance", "sales_report", "cash_flow", "specification_explode", "production_consumption"] },
     "resolvers": { "always_empty": ["sales_channel", "material"] }
   }
 }
@@ -546,21 +551,34 @@ made on the 1C side.
 | Field | Meaning |
 |-------|---------|
 | `profile` | Human-readable database identifier; logging only. |
-| `version` | Version of the profile **structure**, not its contents. A version the gate does not know is ignored whole — applying it half-way is worse than not applying it. |
+| `version` | Version of the profile **structure**, not its contents. Current: `2`. The gate still reads `1` during the migration (see below). A version outside that range is not applied half-way — it is treated as "nothing confirmed". |
 | `unsupported.<tool>` | Facets to remove from that tool's schema: `params`, `filters`, `group_by`, `measures`. Keys are **gate tool names** (`product_specification`), not 1C report types (`specification`). |
 | `extra.<tool>` | Facets to add: things this database supports that the common schema does not declare. A silently hidden capability is the same mistake as a promised missing one, only quieter. |
-| `tools.unavailable` | Tools to drop from `tools/list` entirely. |
+| `tools.available` | **Gate tool names** this database implements. Everything else is dropped from `tools/list`, and a call to it is rejected by the gate without reaching 1C. |
+| `tools.unavailable` | Version 1 only (opt-out, deprecated): tools to drop. Removed together with version 1 support. |
 | `resolvers.always_empty` | Entity names whose resolver always returns an empty list here. The tool is **kept** — it works, it just finds nothing — and its description gains a note. |
 
 Both sides must move together: the profile and the 400s in 1C describe the same thing. The
 refusals stay as the last line of defence — the gate may be an older build, or `health` may be
 unreachable — and in that case the call must hit a clear error, not silence.
 
-Gate behaviour is **fail-open**: no profile, an unknown version, or an unreachable 1C all mean
-"show the schemas as before". The profile sharpens the tool surface; it is not an access
-control. Access is held by scopes and by the checks inside 1C. The profile is cached per
-tenant for 5 minutes (`onec.CapabilitiesTTL`), failures included — otherwise every
-`tools/list` against a down 1C would pay a network timeout.
+Gate behaviour depends on what 1C answered:
+
+| 1C answer | Result |
+|-----------|--------|
+| Profile of a known version | Applied. |
+| `health` without a profile, or an unknown version | Nothing is confirmed: no tools. Logged as `onec.capabilities.missing` / `version_mismatch`. |
+| No answer (network, 5xx) | The last received profile stays in force. If none was ever received, the profile is unknown and the tool list is not narrowed — calls would hit the unavailable 1C anyway, and are checked against the profile once it arrives. Retried after 30 s (`onec.CapabilitiesRetryTTL`). |
+
+The profile sharpens the tool surface; it is not an access control. Access is held by scopes and
+by the checks inside 1C. A received profile is cached per tenant for 5 minutes
+(`onec.CapabilitiesTTL`).
+
+**Migration from version 1.** Version 1 was opt-out (`tools.unavailable`): every new gate tool
+appeared in every database until someone listed it as unavailable there. The gate reads both
+versions, so it can be deployed before the databases are updated. Once every database returns
+version 2, raise `onec.MinCapabilitiesVersion` to 2 and delete the version 1 branch in
+`Capabilities.ToolAvailable`.
 
 ---
 

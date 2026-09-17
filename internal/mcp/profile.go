@@ -16,16 +16,14 @@ import (
 // Приём тот же, что у stripCostMeasures: мутируем map'ы схемы на месте. Это безопасно,
 // потому что GetTools() конструирует их заново на каждый запрос.
 //
+// Набор инструментов — opt-in (профиль версии 2): остаются только подтверждённые базой.
+// Новый инструмент гейта не появляется ни у одной базы, пока та его не объявит.
+//
 // Отказы на стороне 1С остаются последней линией: гейт может быть старой версии или не
 // достучаться до health, и тогда вызов должен упереться в понятную ошибку, а не в тишину.
 func applyProfile(tools []Tool, caps *onec.Capabilities) []Tool {
 	if caps == nil {
 		return tools
-	}
-
-	unavailable := make(map[string]bool, len(caps.Tools.Unavailable))
-	for _, name := range caps.Tools.Unavailable {
-		unavailable[name] = true
 	}
 
 	// Резолвер, который в этой базе всегда пуст, из списка НЕ убирается: инструмент
@@ -40,7 +38,7 @@ func applyProfile(tools []Tool, caps *onec.Capabilities) []Tool {
 	result := make([]Tool, 0, len(tools))
 
 	for _, t := range tools {
-		if unavailable[t.Name] {
+		if !caps.ToolAvailable(t.Name) {
 			continue
 		}
 

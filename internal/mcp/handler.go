@@ -179,6 +179,21 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		})
 	}
 
+	// Инструмент, не подтверждённый профилем базы, отбивается до похода в 1С. tools/list его
+	// уже не показывает, но клиент мог получить список, пока профиль был неизвестен (1С
+	// не отвечала), или позвать инструмент в обход списка. Проверка идёт после скоупа, чтобы
+	// ключ без права не узнавал ничего о составе базы.
+	if caps := h.onecClient.Capabilities(r.Context()); !caps.ToolAvailable(params.Name) {
+		h.logger.Warn("tool.unavailable", "tool", params.Name, "profile", caps.Profile)
+		h.auditToolCall(auth, params.Name, false, "tool_unavailable", started)
+		return NewResponse(req.ID, &CallToolResult{
+			Content: []ContentBlock{TextContent(
+				fmt.Sprintf("tool %q is not available in this database", params.Name),
+			)},
+			IsError: true,
+		})
+	}
+
 	// Меры по закупочной стоимости закрыты отдельным правом. Раньше оно жило только в схеме
 	// (stripCostMeasures вырезает их из enum в tools/list), а вызов не проверялся вовсе: клиент,
 	// проигнорировавший схему, спокойно просил measures:["profit"]. Единственной защитой оставался

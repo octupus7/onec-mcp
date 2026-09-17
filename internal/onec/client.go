@@ -53,9 +53,15 @@ type Client struct {
 	capsExpire time.Time
 }
 
-// CapabilitiesVersion — версия структуры профиля, которую понимает этот гейт.
-// Профиль другой версии игнорируется целиком: применять наполовину опаснее, чем не применять.
-const CapabilitiesVersion = 1
+// CapabilitiesVersion — текущая версия структуры профиля (opt-in, tools.available).
+// MinCapabilitiesVersion — самая старая, которую гейт ещё читает: версия 1 (opt-out,
+// tools.unavailable) оставлена на переходный период, чтобы гейт можно было выкатить раньше,
+// чем обновятся базы. Когда все базы отдадут версию 2 — поднять до 2 и удалить ветку версии 1
+// в Capabilities.ToolAvailable.
+const (
+	CapabilitiesVersion    = 2
+	MinCapabilitiesVersion = 1
+)
 
 func NewClient(s Settings, logger *slog.Logger) *Client {
 	return &Client{
@@ -582,12 +588,23 @@ func (c *Client) VerifyMCPKey(ctx context.Context, key string) (*AuthVerifyRespo
 // поэтому кэш обязателен, но и протухать он должен без перезапуска гейта.
 const CapabilitiesTTL = 5 * time.Minute
 
+// CapabilitiesRetryTTL — через сколько повторить health после сетевой ошибки. Короче
+// основного TTL: пока профиль не получен, гейт работает по устаревшим или неполным данным.
+const CapabilitiesRetryTTL = 30 * time.Second
+
 // Capabilities возвращает профиль возможностей базы из GET /mcp/health, с кэшем на
-// CapabilitiesTTL.
+// CapabilitiesTTL. Три исхода различаются намеренно:
 //
-// Fail-open: если 1С недоступна, отдала старый health без профиля или незнакомую версию
-// профиля — возвращается nil, и гейт показывает схемы как раньше. Профиль уточняет выдачу,
-// но не является контролем доступа: границу держат скоупы и проверки в самой 1С.
+//   - 1С ответила понятным профилем — он и возвращается.
+//   - 1С ответила, но профиля нет или его версия незнакома — возвращается пустой профиль
+//     текущей версии: база ничего не подтвердила, значит, инструментов у неё нет. Раньше
+//     это был fail-open, и именно так не реализованные в базе инструменты доезжали до модели.
+//   - 1С не ответила (сеть, 5xx) — возвращается последний полученный профиль: сбой связи
+//     ничего не говорит о возможностях базы. Если профиля ещё не было — nil, то есть
+//     «неизвестно» (см. Capabilities.ToolAvailable).
+//
+// Профиль уточняет выдачу, но не является контролем доступа: границу держат скоупы и
+// проверки в самой 1С.
 func (c *Client) Capabilities(ctx context.Context) *Capabilities {
 	c.capsMu.RLock()
 	caps, fresh := c.caps, time.Now().Before(c.capsExpire)
@@ -601,26 +618,33 @@ func (c *Client) Capabilities(ctx context.Context) *Capabilities {
 	if err := c.doRequest(ctx, http.MethodGet, "/mcp/health", nil, &health); err != nil {
 		c.logger.Warn("onec.capabilities.failed", "error", err)
 		// Кэшируем и неудачу, иначе каждый tools/list при лежащей 1С добавлял бы к себе
-		// сетевой таймаут.
-		c.storeCapabilities(nil)
-		return nil
+		// сетевой таймаут. Последний известный профиль при этом сохраняется.
+		c.storeCapabilities(caps, CapabilitiesRetryTTL)
+		return caps
 	}
 
-	if health.Capabilities != nil && health.Capabilities.Version != CapabilitiesVersion {
-		c.logger.Warn("onec.capabilities.version_mismatch",
-			"got", health.Capabilities.Version, "want", CapabilitiesVersion)
-		c.storeCapabilities(nil)
-		return nil
+	got := health.Capabilities
+
+	switch {
+	case got == nil:
+		c.logger.Error("onec.capabilities.missing",
+			"hint", "1C health carries no capabilities profile; no tools are confirmed")
+		got = &Capabilities{Version: CapabilitiesVersion}
+	case got.Version < MinCapabilitiesVersion || got.Version > CapabilitiesVersion:
+		c.logger.Error("onec.capabilities.version_mismatch",
+			"profile", got.Profile, "got", got.Version,
+			"min", MinCapabilitiesVersion, "max", CapabilitiesVersion)
+		got = &Capabilities{Profile: got.Profile, Version: CapabilitiesVersion}
 	}
 
-	c.storeCapabilities(health.Capabilities)
+	c.storeCapabilities(got, CapabilitiesTTL)
 
-	return health.Capabilities
+	return got
 }
 
-func (c *Client) storeCapabilities(caps *Capabilities) {
+func (c *Client) storeCapabilities(caps *Capabilities, ttl time.Duration) {
 	c.capsMu.Lock()
 	c.caps = caps
-	c.capsExpire = time.Now().Add(CapabilitiesTTL)
+	c.capsExpire = time.Now().Add(ttl)
 	c.capsMu.Unlock()
 }

@@ -125,21 +125,26 @@ like a breakage.
 
 So 1C publishes a **capabilities profile** in `GET /mcp/health` (format: `docs/onec-integration.md`),
 and `applyProfile` in `internal/mcp/profile.go` edits the schemas before `tools/list` returns
-them: cutting unsupported params / filters / group_by / measures, adding facets the database
-supports beyond the common schema, dropping unavailable tools, and marking resolvers that
-always come back empty. It runs **after** the scope filter — scopes decide what the caller
+them: keeping only the tools the database confirms in `tools.available` (**opt-in** — a new
+gate tool is invisible everywhere until a database lists it), cutting unsupported params /
+filters / group_by / measures, adding facets the database supports beyond the common schema,
+and marking resolvers that always come back empty. `handleToolsCall` rejects an unconfirmed
+tool before calling 1C. It runs **after** the scope filter — scopes decide what the caller
 may see at all, the profile what of that this database can do.
 
 The profile is authored in 1C on purpose: the differences come from its accounting model, and
-a list kept here would go stale silently. It is cached per tenant for `onec.CapabilitiesTTL`,
-failures included. Everything is fail-open — no profile, unknown version or unreachable 1C
-means the schemas are shown as before. The profile sharpens the tool surface; it is **not**
-access control, which stays with scopes and the checks inside 1C.
+a list kept here would go stale silently. It is cached per tenant for `onec.CapabilitiesTTL`.
+A `health` without a profile or with an unknown version confirms nothing — no tools. An
+unreachable 1C keeps the last received profile; with none received yet the profile is unknown
+(`nil`) and the list is not narrowed. Version 1 (opt-out, `tools.unavailable`) is still read
+during the migration — see `onec.MinCapabilitiesVersion`. The profile sharpens the tool
+surface; it is **not** access control, which stays with scopes and the checks inside 1C.
 
 Adding a tool means: a constant, a `ToolScopes` entry (a tool missing from the map is rejected as
 unknown), a definition in `GetTools`, a `case` in the dispatch, and the matching branch in the 1C
 side's `ScopeForReport` / `ScopeForEntity` — the gate's scope map and 1C's must agree, since 1C
-re-checks the `X-MCP-Scopes` header. See `docs/api.md` for the user-facing argument reference.
+re-checks the `X-MCP-Scopes` header. The tool then reaches a database only once that database
+lists it in `tools.available` of its profile. See `docs/api.md` for the user-facing argument reference.
 
 ## Configuration
 

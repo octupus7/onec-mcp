@@ -756,16 +756,25 @@ type SchemaFacets struct {
 //
 // Профиль формирует сама 1С: расхождения порождает её учётная модель, и знает о них
 // код, который на неё опирается. Список в настройках гейта устаревал бы молча.
+//
+// С версии 2 набор инструментов — opt-in: база перечисляет в tools.available то, что
+// реализовала, и гейт показывает только это. В версии 1 было наоборот (tools.unavailable):
+// новый инструмент гейта сразу появлялся у всех баз, в том числе там, где его нет, пока
+// кто-нибудь не вспоминал дописать его в профиль каждой такой базы.
 type Capabilities struct {
 	// Profile — человекочитаемый идентификатор базы ("upp-1.3"), только для логов.
 	Profile string `json:"profile"`
-	// Version — версия СТРУКТУРЫ профиля. Незнакомую версию гейт игнорирует целиком,
-	// вместо того чтобы применять её наполовину.
+	// Version — версия СТРУКТУРЫ профиля. Незнакомую версию гейт не применяет наполовину.
 	Version int `json:"version"`
 	// Unsupported / Extra — по имени инструмента гейта (не типа отчёта 1С).
 	Unsupported map[string]SchemaFacets `json:"unsupported,omitempty"`
 	Extra       map[string]SchemaFacets `json:"extra,omitempty"`
 	Tools       struct {
+		// Available (версия 2) — инструменты, которые база реализовала. Всё остальное скрыто,
+		// включая инструменты, появившиеся в гейте позже, чем база обновила свой профиль.
+		Available []string `json:"available,omitempty"`
+		// Unavailable (версия 1) — переходный период. Удалить вместе с поддержкой версии 1,
+		// когда все базы отдадут версию 2.
 		Unavailable []string `json:"unavailable,omitempty"`
 	} `json:"tools"`
 	Resolvers struct {
@@ -773,6 +782,34 @@ type Capabilities struct {
 		// всегда отвечает пустым списком.
 		AlwaysEmpty []string `json:"always_empty,omitempty"`
 	} `json:"resolvers"`
+}
+
+// ToolAvailable — подтвердила ли база инструмент.
+//
+// nil — профиль неизвестен: 1С недоступна и ни разу его не отдавала. Прятать инструменты
+// из-за этого нельзя — сессия модели, открытая в момент сбоя, осталась бы без инструментов
+// до переподключения. Вызов при этом всё равно упрётся в недоступную 1С, а как только профиль
+// придёт, неподтверждённый инструмент будет отбит на вызове.
+func (c *Capabilities) ToolAvailable(name string) bool {
+	if c == nil {
+		return true
+	}
+
+	if c.Version == 1 {
+		for _, n := range c.Tools.Unavailable {
+			if n == name {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, n := range c.Tools.Available {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // HealthResponse — ответ GET /mcp/health на стороне 1С.

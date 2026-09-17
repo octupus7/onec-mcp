@@ -84,10 +84,29 @@ func hasFilter(t *testing.T, tool Tool, name string) bool {
 	return found
 }
 
+// availableExcept — JSON-массив имён всех инструментов гейта, кроме перечисленных:
+// профиль версии 2 перечисляет подтверждённое, а не скрытое.
+func availableExcept(skip ...string) string {
+	skipped := make(map[string]bool, len(skip))
+	for _, name := range skip {
+		skipped[name] = true
+	}
+
+	names := make([]string, 0, len(GetTools()))
+	for _, tool := range GetTools() {
+		if !skipped[tool.Name] {
+			names = append(names, tool.Name)
+		}
+	}
+
+	payload, _ := json.Marshal(names)
+	return string(payload)
+}
+
 // uppProfile — профиль, который отдаёт УПП 1.3 (сокращённый до проверяемых граней).
-const uppProfile = `{
+var uppProfile = `{
 	"profile": "upp-1.3",
-	"version": 1,
+	"version": 2,
 	"unsupported": {
 		"cash_flow": {"filters": ["cost_article_ids"]},
 		"stock_balance": {"filters": ["firm_ids", "product_status"], "group_by": ["firm"]},
@@ -96,7 +115,7 @@ const uppProfile = `{
 	"extra": {
 		"production_consumption": {"group_by": ["cost_article"]}
 	},
-	"tools": {"unavailable": ["availability_report", "goods_in_transit"]},
+	"tools": {"available": ` + availableExcept(ToolAvailabilityReport, ToolGoodsInTransit) + `},
 	"resolvers": {"always_empty": ["material"]}
 }`
 
@@ -150,7 +169,8 @@ func TestApplyProfileStripsParams(t *testing.T) {
 // Параметр, вырезанный из properties, обязан исчезнуть и из required, иначе схема
 // становится невыполнимой: модель не может передать то, чего в ней нет.
 func TestApplyProfileKeepsRequiredConsistent(t *testing.T) {
-	profile := `{"version": 1, "unsupported": {"specification_explode": {"params": ["product_id"]}}}`
+	profile := `{"version": 2, "tools": {"available": ["specification_explode"]},
+		"unsupported": {"specification_explode": {"params": ["product_id"]}}}`
 
 	explode := findTool(t, applyProfile(GetTools(), capsFromJSON(t, profile)), ToolSpecificationExplode)
 
@@ -194,6 +214,52 @@ func TestApplyProfileDropsUnavailableTools(t *testing.T) {
 	}
 }
 
+// Суть opt-in: инструмент, которого база не назвала, не виден — в том числе появившийся
+// в гейте позже, чем база обновила профиль.
+func TestApplyProfileHidesUnconfirmedTools(t *testing.T) {
+	profile := `{"version": 2, "tools": {"available": ["resolve_product", "stock_balance"]}}`
+
+	tools := applyProfile(GetTools(), capsFromJSON(t, profile))
+
+	if len(tools) != 2 {
+		names := make([]string, 0, len(tools))
+		for _, tool := range tools {
+			names = append(names, tool.Name)
+		}
+		t.Fatalf("expected only the 2 confirmed tools, got %v", names)
+	}
+
+	findTool(t, tools, ToolResolveProduct)
+	findTool(t, tools, ToolStockBalance)
+}
+
+// База ответила, но ничего не подтвердила (пустой профиль, в который клиент превращает
+// health без профиля или с незнакомой версией) — инструментов нет.
+func TestApplyProfileEmptyHidesEverything(t *testing.T) {
+	tools := applyProfile(GetTools(), capsFromJSON(t, `{"version": 2}`))
+
+	if len(tools) != 0 {
+		t.Errorf("a profile that confirms nothing still lists %d tools", len(tools))
+	}
+}
+
+// Переходный период: профиль версии 1 перечисляет скрытое, и всё остальное остаётся видимым.
+func TestApplyProfileLegacyVersion1(t *testing.T) {
+	profile := `{"version": 1, "tools": {"unavailable": ["goods_in_transit"]}}`
+
+	tools := applyProfile(GetTools(), capsFromJSON(t, profile))
+
+	if len(tools) != len(GetTools())-1 {
+		t.Errorf("version 1 profile: expected exactly 1 tool dropped, got %d of %d", len(tools), len(GetTools()))
+	}
+
+	for _, tool := range tools {
+		if tool.Name == ToolGoodsInTransit {
+			t.Error("goods_in_transit is unavailable in the version 1 profile but still listed")
+		}
+	}
+}
+
 // Резолвер, который всегда пуст, остаётся в списке: он работает, просто ничего не находит.
 // Убрать его совсем — значит потерять инструмент из виду, когда база заполнит признак.
 func TestApplyProfileMarksAlwaysEmptyResolver(t *testing.T) {
@@ -210,8 +276,8 @@ func TestApplyProfileMarksAlwaysEmptyResolver(t *testing.T) {
 	}
 }
 
-// Нет профиля — поведение ровно прежнее. Это и есть fail-open: недоступность 1С не должна
-// сужать выдачу инструментов.
+// nil — профиль неизвестен (1С недоступна и ещё ни разу его не отдала). Недоступность 1С
+// не должна сужать выдачу: сессия, открытая в момент сбоя, осталась бы без инструментов.
 func TestApplyProfileNilIsNoop(t *testing.T) {
 	tools := applyProfile(GetTools(), nil)
 
@@ -271,9 +337,9 @@ func TestRealProfileNamesMatchTools(t *testing.T) {
 		}
 	}
 
-	for _, name := range caps.Tools.Unavailable {
+	for _, name := range caps.Tools.Available {
 		if !known[name] {
-			t.Errorf("tools.unavailable names %q, which is not a tool of this gate", name)
+			t.Errorf("tools.available names %q, which is not a tool of this gate", name)
 		}
 	}
 

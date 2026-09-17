@@ -41,10 +41,10 @@ const healthWithProfile = `{
 	"time": "2026-09-03T10:00:00",
 	"capabilities": {
 		"profile": "upp-1.3",
-		"version": 1,
+		"version": 2,
 		"unsupported": {"cash_flow": {"filters": ["cost_article_ids"]}},
 		"extra": {"production_consumption": {"group_by": ["cost_article"]}},
-		"tools": {"unavailable": ["goods_in_transit"]},
+		"tools": {"available": ["cash_flow", "production_consumption"]},
 		"resolvers": {"always_empty": ["material"]}
 	}
 }`
@@ -70,8 +70,8 @@ func TestCapabilitiesParsesProfile(t *testing.T) {
 		t.Errorf("extra.production_consumption.group_by = %v", got)
 	}
 
-	if len(caps.Tools.Unavailable) != 1 || caps.Tools.Unavailable[0] != "goods_in_transit" {
-		t.Errorf("tools.unavailable = %v", caps.Tools.Unavailable)
+	if !caps.ToolAvailable("cash_flow") || caps.ToolAvailable("goods_in_transit") {
+		t.Errorf("tools.available parsed as %v", caps.Tools.Available)
 	}
 
 	if len(caps.Resolvers.AlwaysEmpty) != 1 || caps.Resolvers.AlwaysEmpty[0] != "material" {
@@ -95,29 +95,54 @@ func TestCapabilitiesAreCached(t *testing.T) {
 	}
 }
 
-// Старая 1С отвечает health без профиля. Это не ошибка: гейт просто показывает схемы
-// как раньше.
-func TestCapabilitiesAbsentProfile(t *testing.T) {
+// 1С ответила, но профиля не отдала: база ничего не подтвердила. Раньше это был fail-open,
+// и так до модели доезжали инструменты, которых в базе нет.
+func TestCapabilitiesAbsentProfileConfirmsNothing(t *testing.T) {
 	client, _ := capsServer(t, `{"status":"ok","time":"2026-09-03T10:00:00"}`)
 
-	if caps := client.Capabilities(context.Background()); caps != nil {
-		t.Errorf("expected nil capabilities for a health without a profile, got %+v", caps)
+	caps := client.Capabilities(context.Background())
+	if caps == nil {
+		t.Fatal("expected an empty profile for a health without capabilities, got nil (unknown)")
+	}
+
+	if caps.ToolAvailable("stock_balance") {
+		t.Error("a database that published no profile has a confirmed tool")
 	}
 }
 
-// Профиль незнакомой версии игнорируется целиком: применить его наполовину опаснее,
-// чем не применять вовсе.
+// Незнакомую версию не применяем наполовину — и не показываем по ней всё подряд.
 func TestCapabilitiesVersionMismatch(t *testing.T) {
-	client, _ := capsServer(t, `{"status":"ok","capabilities":{"profile":"upp-1.3","version":99}}`)
+	client, _ := capsServer(t,
+		`{"status":"ok","capabilities":{"profile":"upp-1.3","version":99,"tools":{"available":["stock_balance"]}}}`)
 
-	if caps := client.Capabilities(context.Background()); caps != nil {
-		t.Errorf("expected nil capabilities for version 99, got %+v", caps)
+	caps := client.Capabilities(context.Background())
+	if caps == nil {
+		t.Fatal("expected an empty profile for version 99, got nil")
+	}
+
+	if caps.ToolAvailable("stock_balance") {
+		t.Error("a profile of an unknown version was partially applied")
 	}
 }
 
-// Fail-open: недоступная 1С не должна сужать выдачу инструментов. И повторные вызовы
-// не должны каждый раз ждать сетевого таймаута.
-func TestCapabilitiesFailOpen(t *testing.T) {
+// Переходный период: профиль версии 1 ещё читается.
+func TestCapabilitiesLegacyVersion1(t *testing.T) {
+	client, _ := capsServer(t,
+		`{"status":"ok","capabilities":{"version":1,"tools":{"unavailable":["goods_in_transit"]}}}`)
+
+	caps := client.Capabilities(context.Background())
+	if caps == nil || caps.Version != 1 {
+		t.Fatalf("version 1 profile not accepted: %+v", caps)
+	}
+
+	if !caps.ToolAvailable("stock_balance") || caps.ToolAvailable("goods_in_transit") {
+		t.Error("version 1 profile applied incorrectly")
+	}
+}
+
+// Недоступная 1С без ранее полученного профиля: профиль неизвестен (nil), выдача не
+// сужается. И повторные вызовы не ждут сетевого таймаута.
+func TestCapabilitiesUnknownWhenUnreachable(t *testing.T) {
 	var hits atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,5 +165,45 @@ func TestCapabilitiesFailOpen(t *testing.T) {
 
 	if got := hits.Load(); got != 1 {
 		t.Errorf("1C hit %d times after a failure, want 1 — the failure is not cached", got)
+	}
+}
+
+// Сбой связи ничего не говорит о возможностях базы: последний полученный профиль остаётся
+// в силе, иначе на время сбоя к модели вернулись бы все неподтверждённые инструменты.
+func TestCapabilitiesKeepLastProfileOnFailure(t *testing.T) {
+	var down atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(healthWithProfile))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(Settings{
+		BaseURL:       srv.URL,
+		Timeout:       2 * time.Second,
+		ReportTimeout: 2 * time.Second,
+	}, slog.New(slog.DiscardHandler))
+
+	if client.Capabilities(context.Background()) == nil {
+		t.Fatal("initial profile not received")
+	}
+
+	down.Store(true)
+	client.capsMu.Lock()
+	client.capsExpire = time.Time{}
+	client.capsMu.Unlock()
+
+	caps := client.Capabilities(context.Background())
+	if caps == nil || caps.Profile != "upp-1.3" {
+		t.Fatalf("last known profile lost on a 1C failure: %+v", caps)
+	}
+
+	if caps.ToolAvailable("goods_in_transit") {
+		t.Error("an unconfirmed tool became available during a 1C outage")
 	}
 }
