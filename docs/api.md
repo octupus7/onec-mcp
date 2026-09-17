@@ -429,6 +429,11 @@ Get available tools and their JSON schemas.
         "inputSchema": { ... }
       },
       {
+        "name": "returns_report",
+        "description": "Customer returns for a period — what came back, from whom, where and why...",
+        "inputSchema": { ... }
+      },
+      {
         "name": "event_log",
         "description": "Read the 1C event log (журнал регистрации): errors/events for a period by level or type...",
         "inputSchema": { ... }
@@ -664,6 +669,39 @@ The flag is read from `ВПути` **or** `Статус.Предваритель
 Without `mcp:report:cost` the report covers goods for sale only — purchases of raw materials
 (номенклатура с пометкой `ДляПроизводства`) are excluded from both rows and totals, exactly as in
 `stock_balance`.
+
+---
+
+### `returns_report`
+
+Customer returns (возвраты товаров от покупателей) from **posted** documents for a **period**.
+`sales_report` and `top_products` are net of returns; this tool shows the returns themselves —
+return rate, most-returned products, customers who return the most, return reasons. Requires
+**`mcp:report:sales`**.
+
+**Channels.** `retail` — returns processed in the stores' retail system; `other` — online orders and
+wholesale. Retail returns carry no named customer: their `customer` cell is empty and a
+`customer_ids` filter leaves them out.
+
+**Amounts** are the refund value incl. VAT in the document currency; **qty** is in the product's
+base unit.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `period.from` / `period.to` | string | Yes | Period bounds (YYYY-MM-DD). |
+| `filters.customer_ids` | array | No | Customer UUIDs; leaf or group — IN HIERARCHY. Excludes retail returns. |
+| `filters.warehouse_ids` | array | No | Receiving warehouse UUIDs. |
+| `filters.product_ids` | array | No | Product UUIDs; leaf or group — IN HIERARCHY. |
+| `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
+| `filters.channel` | string | No | `retail` or `other`. Omit for both. |
+| `group_by` | array | No | `customer`, `warehouse`, `product`, `product_group`, `firm`, `reason`, `channel`, `document`, `day`, `week`, `month` (default: `customer`, `product`; one period dimension at a time). |
+| `measures` | array | No | `qty`, `amount`, `documents` (default: `qty`, `amount`). |
+| `top` | integer | No | Limit rows. |
+| `sort` | array | No | `[{field, dir}]` (default: `amount` desc). |
+
+**УПП 1.3 implementation.** Source: lines of `ВозвратТоваровОтПокупателя` plus negative lines of
+`ОтчетОРозничныхПродажах` (a return made in the same shift as the sale). `retail` is a return
+document whose number carries the retail exchange node prefix `00РТ`, or a retail-report line.
 
 ---
 

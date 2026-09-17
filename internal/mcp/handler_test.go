@@ -702,3 +702,45 @@ func TestUnconfirmedToolRejectedOnCall(t *testing.T) {
 		t.Errorf("unexpected rejection text: %+v", res.Content)
 	}
 }
+
+// returns_report ходит в /mcp/reports/returns и доносит до 1С все фильтры, включая channel.
+func TestReturnsReportRequest(t *testing.T) {
+	h, fake := newTestHandler(t)
+
+	callTool(t, h, ToolReturnsReport, map[string]any{
+		"period":   map[string]any{"from": "2026-09-01", "to": "2026-09-17"},
+		"group_by": []string{"channel", "reason"},
+		"filters": map[string]any{
+			"customer_ids":  []string{"cust-1"},
+			"warehouse_ids": []string{"wh-1"},
+			"product_ids":   []string{"prod-1"},
+			"channel":       "retail",
+		},
+	})
+
+	got := fake.recorded(t, 0)
+
+	if got.path != "/mcp/reports/returns" {
+		t.Errorf("path = %q, want /mcp/reports/returns", got.path)
+	}
+
+	filters, ok := got.body["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("filters missing in %v", got.body)
+	}
+
+	for _, key := range []string{"customer_ids", "warehouse_ids", "product_ids"} {
+		if _, ok := filters[key]; !ok {
+			t.Errorf("filter %s did not reach 1C: %v", key, filters)
+		}
+	}
+
+	if filters["channel"] != "retail" {
+		t.Errorf("channel = %v, want retail", filters["channel"])
+	}
+
+	period, _ := got.body["period"].(map[string]any)
+	if period["from"] != "2026-09-01" || period["to"] != "2026-09-17" {
+		t.Errorf("period = %v", got.body["period"])
+	}
+}

@@ -637,6 +637,36 @@ type ReservesRequest struct {
 	Sort     []SortSpec      `json:"sort,omitempty"`
 }
 
+// ReturnsFilters — отборы отчёта по возвратам. Channel — "retail" | "other"; гейт значение не
+// интерпретирует, допустимость проверяет схема и 1С.
+type ReturnsFilters struct {
+	CustomerIDs  []string `json:"customer_ids,omitempty"`
+	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
+	ProductIDs   []string `json:"product_ids,omitempty"`
+	FirmIDs      []string `json:"firm_ids,omitempty"`
+	Channel      string   `json:"channel,omitempty"`
+}
+
+func (f *ReturnsFilters) UnmarshalJSON(data []byte) error {
+	type alias ReturnsFilters
+	var a alias
+	if err := unmarshalObjectOrString(data, &a); err != nil {
+		return err
+	}
+	*f = ReturnsFilters(a)
+	return nil
+}
+
+// ReturnsRequest — тело POST /mcp/reports/returns.
+type ReturnsRequest struct {
+	Period   Period         `json:"period"`
+	Filters  ReturnsFilters `json:"filters,omitempty"`
+	GroupBy  []string       `json:"group_by,omitempty"`
+	Measures []string       `json:"measures,omitempty"`
+	Top      int            `json:"top,omitempty"`
+	Sort     []SortSpec     `json:"sort,omitempty"`
+}
+
 type GoodsInTransitRequest struct {
 	Date     string                `json:"date,omitempty"`
 	Filters  GoodsInTransitFilters `json:"filters,omitempty"`

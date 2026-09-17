@@ -266,6 +266,8 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 		result, err = h.callGoodsInTransit(r, params.Arguments)
 	case ToolStockReserves:
 		result, err = h.callStockReserves(r, params.Arguments)
+	case ToolReturnsReport:
+		result, err = h.callReturnsReport(r, params.Arguments)
 	case ToolSalesReport:
 		result, err = h.callSalesReport(r, params.Arguments)
 	case ToolStockBalance:
@@ -831,6 +833,41 @@ func (h *Handler) callStockReserves(r *http.Request, args any) (*CallToolResult,
 	}
 
 	resp, err := h.onecClient.StockReserves(r.Context(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{TextContent(string(resp))},
+	}, nil
+}
+
+type returnsArgs struct {
+	Period   onec.Period         `json:"period"`
+	Filters  onec.ReturnsFilters `json:"filters"`
+	GroupBy  []string            `json:"group_by"`
+	Measures []string            `json:"measures"`
+	Top      flexInt             `json:"top"`
+	Sort     []onec.SortSpec     `json:"sort"`
+}
+
+// callReturnsReport — возвраты товаров от покупателей за период.
+func (h *Handler) callReturnsReport(r *http.Request, args any) (*CallToolResult, error) {
+	var a returnsArgs
+	if err := mapToStruct(args, &a); err != nil {
+		return nil, err
+	}
+
+	req := &onec.ReturnsRequest{
+		Period:   a.Period,
+		Filters:  a.Filters,
+		GroupBy:  a.GroupBy,
+		Measures: a.Measures,
+		Top:      h.clampTop(a.Top),
+		Sort:     a.Sort,
+	}
+
+	resp, err := h.onecClient.ReturnsReport(r.Context(), req)
 	if err != nil {
 		return nil, err
 	}

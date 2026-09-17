@@ -519,6 +519,17 @@ func (c *Client) StockReserves(ctx context.Context, req *ReservesRequest) (json.
 	return resp, nil
 }
 
+// ReturnsReport — возвраты товаров от покупателей за период. Ответ пробрасывается как есть:
+// состав колонок задаёт 1С.
+func (c *Client) ReturnsReport(ctx context.Context, req *ReturnsRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	if err := c.doRequest(ctx, http.MethodPost, "/mcp/reports/returns", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
 // TopProducts / CustomerSummary возвращаются как json.RawMessage —
 // гейту достаточно прокинуть тело наверх, без декомпозиции в типизированную структуру.
 // Это позволяет добавлять поля в 1С-стороне без правки гейта.

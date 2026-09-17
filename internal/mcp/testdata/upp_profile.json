@@ -151,6 +151,7 @@
       "sales_report",
       "top_products",
       "customer_summary",
+      "returns_report",
       "stock_balance",
       "cash_balance",
       "cash_flow",

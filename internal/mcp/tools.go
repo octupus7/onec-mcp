@@ -23,6 +23,7 @@ const (
 	ToolPurchasesReport     = "purchases_report"
 	ToolGoodsInTransit      = "goods_in_transit"
 	ToolStockReserves       = "stock_reserves"
+	ToolReturnsReport       = "returns_report"
 	ToolEventLog            = "event_log"
 	ToolObjectHistory       = "object_history"
 	ToolFindDocument        = "find_document"
@@ -81,9 +82,11 @@ var ToolScopes = map[string]string{
 	// Резервы — та же складская величина (мера reserved_qty у stock_balance), только в разрезе
 	// клиента и документа. Имя контрагента раскрывает и goods_in_transit разрезом supplier,
 	// поэтому отдельного права не заводим.
-	ToolStockReserves:       "mcp:report:stock",
-	ToolTopProducts:         "mcp:report:sales",
-	ToolCustomerSummary:     "mcp:report:sales",
+	ToolStockReserves:   "mcp:report:stock",
+	ToolTopProducts:     "mcp:report:sales",
+	ToolCustomerSummary: "mcp:report:sales",
+	// Возвраты — оборотная сторона продаж: те же клиенты, товары и суммы выручки.
+	ToolReturnsReport:       "mcp:report:sales",
 	ToolResolveSalesChannel: "mcp:resolve",
 	// Фирма (юрлицо) — измерение отчётов, а не чувствительные данные сама по себе:
 	// общий mcp:resolve. В многофирменных базах видимый список дополнительно урезается
@@ -862,6 +865,82 @@ func GetTools() []Tool {
 						},
 					},
 				},
+			},
+		},
+		{
+			Name:        ToolReturnsReport,
+			Description: "Customer returns (возвраты товаров от покупателей) for a period — what came back, from whom, to which warehouse, how much and why. sales_report and top_products are NET of returns; use this tool to see the returns themselves: return rate against sales, most-returned products, customers who return the most, return reasons. Only posted documents are counted. Two channels: retail (returns processed in the stores' retail system) and other (online orders, wholesale). Retail returns carry no named customer — the customer cell is empty for them, and a customer_ids filter leaves them out. Dimensions (group_by): customer, warehouse (where the goods were received back), product, product_group, firm, reason (the return reason from the document; empty when not specified), channel ('retail' | 'other'), document (the return document), day, week, month (default: customer, product; day/week/month return ISO date strings). Measures: qty (in the product's base unit), amount (refund value incl. VAT, in the document currency), documents (count of distinct return documents) — default: qty, amount. Filters: customer_ids (IN HIERARCHY), warehouse_ids, product_ids (IN HIERARCHY, accepts group UUIDs), firm_ids, channel. Response includes period {from,to}. Requires the mcp:report:sales permission. sort.field must be a selected dimension or measure.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"period": map[string]any{
+						"type":        "object",
+						"description": "Report period",
+						"properties": map[string]any{
+							"from": map[string]any{"type": "string", "format": "date", "description": "Start date (YYYY-MM-DD)"},
+							"to":   map[string]any{"type": "string", "format": "date", "description": "End date (YYYY-MM-DD)"},
+						},
+						"required": []string{"from", "to"},
+					},
+					"filters": map[string]any{
+						"type":                 "object",
+						"description":          "Optional filters",
+						"additionalProperties": false,
+						"properties": map[string]any{
+							"customer_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by customer IDs (from resolve_customer). Leaf or group UUIDs — applied as IN HIERARCHY. Retail returns have no customer and are excluded by this filter.",
+							},
+							"warehouse_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by the receiving warehouse IDs (from resolve_warehouse).",
+							},
+							"product_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by product IDs (from resolve_product). Leaf or group UUIDs — applied as IN HIERARCHY.",
+							},
+							"firm_ids": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "Filter by firm (legal entity) IDs from resolve_firm. In multi-company databases the key may be limited to a subset of firms; omitting this filter means all firms the key is allowed to see.",
+							},
+							"channel": map[string]any{
+								"type":        "string",
+								"enum":        []string{"retail", "other"},
+								"description": "Only retail returns (store retail system) or only the other ones (online orders, wholesale). Omit for both.",
+							},
+						},
+					},
+					"group_by": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"customer", "warehouse", "product", "product_group", "firm", "reason", "channel", "document", "day", "week", "month"}},
+						"description": "Group results by dimensions (default: customer, product). day/week/month bucket by document date — only one of them at a time. Do not combine product with product_group; the redundant one is dropped.",
+					},
+					"measures": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "enum": []string{"qty", "amount", "documents"}},
+						"description": "Measures to include (default: qty, amount). qty = returned quantity in the base unit; amount = refund value incl. VAT in the document currency; documents = number of distinct return documents.",
+					},
+					"top": map[string]any{
+						"type":        "integer",
+						"description": "Limit number of rows returned",
+					},
+					"sort": map[string]any{
+						"type":        "array",
+						"description": "Sort order (sort.field must be a selected dimension or measure; default amount desc)",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"field": map[string]any{"type": "string"},
+								"dir":   map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+							},
+						},
+					},
+				},
+				"required": []string{"period"},
 			},
 		},
 		{
