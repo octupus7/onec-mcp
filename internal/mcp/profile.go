@@ -47,7 +47,7 @@ func applyProfile(tools []Tool, caps *onec.Capabilities) []Tool {
 		}
 
 		if facets, ok := caps.Extra[t.Name]; ok {
-			addFacets(t, facets)
+			addFacets(t, facets, extraFacetNotes[t.Name])
 		}
 
 		if alwaysEmpty[t.Name] {
@@ -89,14 +89,81 @@ func stripFacets(t Tool, facets onec.SchemaFacets) {
 // addFacets досыпает в схему то, что база умеет, а общий контракт не объявляет.
 // Обратная сторона профиля: молчаливо спрятанная возможность — та же ошибка, что
 // обещанная несуществующая, просто тише.
-func addFacets(t Tool, facets onec.SchemaFacets) {
+//
+// Профиль передаёт только имена; смысл грани модели объясняет notes — текст, известный гейту.
+// Без него фильтр получает общее описание, а значение group_by — никакого.
+func addFacets(t Tool, facets onec.SchemaFacets, notes facetNotes) {
 	props := schemaProperties(t)
 	if props == nil {
 		return
 	}
 
-	addEnum(props, "group_by", facets.GroupBy)
+	if added := addEnum(props, "group_by", facets.GroupBy); len(added) > 0 {
+		appendDescription(props, "group_by", notesFor(notes.GroupBy, added))
+	}
+
 	addEnum(props, "measures", facets.Measures)
+	addFilters(props, facets.Filters, notes.Filters)
+}
+
+// addFilters добавляет отборы-массивы UUID. Уже объявленный отбор не перезаписывается:
+// описание общей схемы точнее того, что гейт может сказать по одному имени.
+func addFilters(props map[string]any, names []string, notes map[string]string) {
+	if len(names) == 0 {
+		return
+	}
+
+	filters, ok := props["filters"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	filterProps, ok := filters["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	for _, name := range names {
+		if _, exists := filterProps[name]; exists {
+			continue
+		}
+
+		description := notes[name]
+		if description == "" {
+			description = "Filter by " + name + " (UUIDs)."
+		}
+
+		filterProps[name] = map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": description,
+		}
+	}
+}
+
+func notesFor(notes map[string]string, values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		if note := notes[v]; note != "" {
+			result = append(result, note)
+		}
+	}
+
+	return result
+}
+
+func appendDescription(props map[string]any, field string, notes []string) {
+	if len(notes) == 0 {
+		return
+	}
+
+	spec, ok := props[field].(map[string]any)
+	if !ok {
+		return
+	}
+
+	description, _ := spec["description"].(string)
+	spec["description"] = strings.TrimSpace(description + " " + strings.Join(notes, " "))
 }
 
 func schemaProperties(t Tool) map[string]any {
@@ -158,19 +225,20 @@ func stripEnum(props map[string]any, field string, values []string) {
 	holder["enum"] = kept
 }
 
-func addEnum(props map[string]any, field string, values []string) {
+// addEnum дописывает значения в enum и возвращает те, которых там ещё не было.
+func addEnum(props map[string]any, field string, values []string) []string {
 	if len(values) == 0 {
-		return
+		return nil
 	}
 
 	holder := enumHolder(props, field)
 	if holder == nil {
-		return
+		return nil
 	}
 
 	current, ok := holder["enum"].([]string)
 	if !ok {
-		return
+		return nil
 	}
 
 	present := make(map[string]bool, len(current))
@@ -178,14 +246,19 @@ func addEnum(props map[string]any, field string, values []string) {
 		present[v] = true
 	}
 
+	var added []string
+
 	for _, v := range values {
 		if !present[v] {
 			current = append(current, v)
+			added = append(added, v)
 			present[v] = true
 		}
 	}
 
 	holder["enum"] = current
+
+	return added
 }
 
 // removeRequired вычёркивает параметр из required: оставленный там параметр, которого

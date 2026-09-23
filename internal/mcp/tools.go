@@ -66,6 +66,39 @@ var CostMeasures = map[string][]string{
 	ToolGoodsInTransit: {"amount", "amount_in_currency"},
 }
 
+// facetNotes — что сказать модели о грани, добавленной профилем базы (extra). Профиль
+// передаёт только имена: смысл грани гейт знает, а 1С в health его не описывает.
+type facetNotes struct {
+	// Filters — описание свойства отбора целиком.
+	Filters map[string]string
+	// GroupBy — предложение, дописываемое к описанию group_by, если значение добавлено.
+	GroupBy map[string]string
+}
+
+// extraFacetNotes — описания граней extra по инструментам. Грань без записи здесь всё равно
+// добавляется, просто с общим описанием.
+var extraFacetNotes = map[string]facetNotes{
+	// Связь возврата с продажей (УПП): заказ из шапки возврата и документ продажи из его строк.
+	ToolReturnsReport: {
+		Filters: map[string]string{
+			"order_ids": "Filter by customer order IDs (the order the return was entered against). " +
+				"Take the id from find_document or from the order dimension of this report.",
+			"sale_document_ids": "Filter by sale document IDs (the sale the returned goods came from). " +
+				"Take the id from find_document (e.g. doc_type РеализацияТоваровУслуг) or from the " +
+				"sale_document dimension. Returns are selected by THEIR date: to answer 'were there " +
+				"returns for this sale', the period must cover the return dates, not the sale date.",
+		},
+		GroupBy: map[string]string{
+			"order": "order = the customer order the return was entered against; the only link to " +
+				"the sale for returns not based on a sale document.",
+			"sale_document": "sale_document = the sale the returned goods came from; filled only for " +
+				"returns entered on the basis of a sale document. Returns against an order (web " +
+				"orders), manual returns and retail returns in the same shift show '(не указано)' — " +
+				"for them use order.",
+		},
+	},
+}
+
 // ToolScopes — обязательный scope для каждого MCP-инструмента.
 // Проверяется в handleToolsCall и используется для фильтрации tools/list по правам пользователя.
 // При добавлении нового инструмента — обязательно прописать его сюда, иначе вызов будет отказан.
@@ -869,7 +902,7 @@ func GetTools() []Tool {
 		},
 		{
 			Name:        ToolReturnsReport,
-			Description: "Customer returns (возвраты товаров от покупателей) for a period — what came back, from whom, to which warehouse, how much and why. sales_report and top_products are NET of returns; use this tool to see the returns themselves: return rate against sales, most-returned products, customers who return the most, return reasons. Only posted documents are counted. Two channels: retail (returns processed in the stores' retail system) and other (online orders, wholesale). Retail returns carry no named customer — the customer cell is empty for them, and a customer_ids filter leaves them out. Dimensions (group_by): customer, warehouse (where the goods were received back), product, product_group, firm, reason (the return reason from the document; empty when not specified), channel ('retail' | 'other'), document (the return document), day, week, month (default: customer, product; day/week/month return ISO date strings). Measures: qty (in the product's base unit), amount (refund value incl. VAT, in the document currency), documents (count of distinct return documents) — default: qty, amount. Filters: customer_ids (IN HIERARCHY), warehouse_ids, product_ids (IN HIERARCHY, accepts group UUIDs), firm_ids, channel. Response includes period {from,to}. Requires the mcp:report:sales permission. sort.field must be a selected dimension or measure.",
+			Description: "Customer returns (возвраты товаров от покупателей) for a period — what came back, from whom, to which warehouse, how much and why. sales_report and top_products are NET of returns; use this tool to see the returns themselves: return rate against sales, most-returned products, customers who return the most, return reasons. Only posted documents are counted. Two channels: retail (returns processed in the stores' retail system) and other (online orders, wholesale). Retail returns carry no named customer — the customer cell is empty for them, and a customer_ids filter leaves them out. Dimensions (group_by): customer, warehouse (where the goods were received back), product, product_group, firm, reason (the return reason from the document; empty when not specified), channel ('retail' | 'other'), document (the return document), day, week, month (default: customer, product; day/week/month return ISO date strings). A document dimension cell is {id, label} and may carry type — the 1C document kind (\"Document.<Name>\"); an empty reference has id and type \"\". Measures: qty (in the product's base unit), amount (refund value incl. VAT, in the document currency), documents (count of distinct return documents) — default: qty, amount. Filters: customer_ids (IN HIERARCHY), warehouse_ids, product_ids (IN HIERARCHY, accepts group UUIDs), firm_ids, channel. Response includes period {from,to}. Requires the mcp:report:sales permission. sort.field must be a selected dimension or measure.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

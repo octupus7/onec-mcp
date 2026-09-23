@@ -135,6 +135,16 @@
         "project",
         "document"
       ]
+    },
+    "returns_report": {
+      "group_by": [
+        "order",
+        "sale_document"
+      ],
+      "filters": [
+        "order_ids",
+        "sale_document_ids"
+      ]
     }
   },
   "tools": {

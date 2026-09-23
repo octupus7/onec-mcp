@@ -113,7 +113,8 @@ var uppProfile = `{
 		"specification_explode": {"params": ["matrix_id", "composition_type_id", "production_group_id"]}
 	},
 	"extra": {
-		"production_consumption": {"group_by": ["cost_article"]}
+		"production_consumption": {"group_by": ["cost_article"]},
+		"returns_report": {"group_by": ["sale_document"], "filters": ["sale_document_ids", "customer_ids", "unknown_ids"]}
 	},
 	"tools": {"available": ` + availableExcept(ToolAvailabilityReport, ToolGoodsInTransit) + `},
 	"resolvers": {"always_empty": ["material"]}
@@ -197,6 +198,59 @@ func TestApplyProfileAddsExtraFacets(t *testing.T) {
 	// Добавление не должно вытеснять то, что уже было.
 	if !hasValue(groups, "material") {
 		t.Errorf("production_consumption group_by lost material: %v", groups)
+	}
+}
+
+// extra.filters добавляет отбор-массив UUID; уже объявленный отбор остаётся как был.
+func TestApplyProfileAddsExtraFilters(t *testing.T) {
+	returns := findTool(t, applyProfile(GetTools(), capsFromJSON(t, uppProfile)), ToolReturnsReport)
+
+	filterProps := schemaProperties(returns)["filters"].(map[string]any)["properties"].(map[string]any)
+
+	added, ok := filterProps["sale_document_ids"].(map[string]any)
+	if !ok {
+		t.Fatalf("returns_report lacks sale_document_ids, which this database supports: %v", filterProps)
+	}
+
+	if added["type"] != "array" || added["items"].(map[string]any)["type"] != "string" {
+		t.Errorf("sale_document_ids is not an array of strings: %v", added)
+	}
+
+	if description, _ := added["description"].(string); !strings.Contains(description, "find_document") {
+		t.Errorf("sale_document_ids got no gate-side description: %q", description)
+	}
+
+	// Грань без описания в гейте всё равно добавляется — с общим текстом.
+	if unknown, ok := filterProps["unknown_ids"].(map[string]any); !ok || unknown["description"] == "" {
+		t.Errorf("unknown_ids not added with a fallback description: %v", filterProps["unknown_ids"])
+	}
+
+	customer := filterProps["customer_ids"].(map[string]any)
+	if description, _ := customer["description"].(string); !strings.Contains(description, "Retail returns") {
+		t.Errorf("customer_ids description overwritten by extra: %q", description)
+	}
+
+	// Пояснение к разрезу дописывается только для добавленного значения.
+	groupBy := schemaProperties(returns)["group_by"].(map[string]any)["description"].(string)
+	if !strings.Contains(groupBy, "sale_document =") {
+		t.Errorf("group_by description lacks the sale_document note: %q", groupBy)
+	}
+
+	if strings.Contains(groupBy, "order =") {
+		t.Errorf("group_by description explains order, which this profile did not add: %q", groupBy)
+	}
+}
+
+// Без extra у базы нет ни отборов, ни пояснений о связи с продажей.
+func TestReturnsSaleLinkHiddenWithoutProfile(t *testing.T) {
+	returns := findTool(t, GetTools(), ToolReturnsReport)
+
+	if hasFilter(t, returns, "sale_document_ids") || hasFilter(t, returns, "order_ids") {
+		t.Error("returns_report offers sale-link filters in the common schema")
+	}
+
+	if groups := enumOf(t, returns, "group_by"); hasValue(groups, "sale_document") || hasValue(groups, "order") {
+		t.Errorf("returns_report offers sale-link dimensions in the common schema: %v", groups)
 	}
 }
 
@@ -410,6 +464,18 @@ func TestRealProfileShapesTools(t *testing.T) {
 				t.Errorf("tool %s is not implemented in this database but is still listed", name)
 			}
 		}
+	}
+
+	returns := findTool(t, tools, ToolReturnsReport)
+
+	for _, name := range []string{"order_ids", "sale_document_ids"} {
+		if !hasFilter(t, returns, name) {
+			t.Errorf("returns_report lacks filter %s, which this database supports", name)
+		}
+	}
+
+	if groups := enumOf(t, returns, "group_by"); !hasValue(groups, "order") || !hasValue(groups, "sale_document") {
+		t.Errorf("returns_report group_by lacks order / sale_document: %v", groups)
 	}
 
 	if !strings.Contains(findTool(t, tools, ToolResolveMaterial).Description, "always returns an empty list") {

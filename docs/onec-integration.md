@@ -540,7 +540,8 @@ made on the 1C side.
       "specification_explode": { "params": ["matrix_id", "composition_type_id"] }
     },
     "extra": {
-      "production_consumption": { "group_by": ["cost_article"] }
+      "production_consumption": { "group_by": ["cost_article"] },
+      "returns_report": { "group_by": ["order", "sale_document"], "filters": ["order_ids", "sale_document_ids"] }
     },
     "tools": { "available": ["resolve_customer", "resolve_product", "stock_balance", "sales_report", "cash_flow", "specification_explode", "production_consumption"] },
     "resolvers": { "always_empty": ["sales_channel", "material"] }
@@ -553,7 +554,7 @@ made on the 1C side.
 | `profile` | Human-readable database identifier; logging only. |
 | `version` | Version of the profile **structure**, not its contents. Current: `2`. The gate still reads `1` during the migration (see below). A version outside that range is not applied half-way — it is treated as "nothing confirmed". |
 | `unsupported.<tool>` | Facets to remove from that tool's schema: `params`, `filters`, `group_by`, `measures`. Keys are **gate tool names** (`product_specification`), not 1C report types (`specification`). |
-| `extra.<tool>` | Facets to add: things this database supports that the common schema does not declare. A silently hidden capability is the same mistake as a promised missing one, only quieter. |
+| `extra.<tool>` | Facets to add: things this database supports that the common schema does not declare — `group_by`, `measures`, `filters`. A silently hidden capability is the same mistake as a promised missing one, only quieter. An `extra` filter is always an **array of UUIDs** (like `customer_ids`); the profile carries only names, and the gate supplies the description if it knows the facet (`extraFacetNotes`), a generic one otherwise. A filter call is checked against the profiled schema: a filter declared nowhere — in the common schema or in `extra` — is rejected by the gate. `extra.filters` was added without raising `version`: an older gate simply ignores the key. |
 | `tools.available` | **Gate tool names** this database implements. Everything else is dropped from `tools/list`, and a call to it is rejected by the gate without reaching 1C. |
 | `tools.unavailable` | Version 1 only (opt-out, deprecated): tools to drop. Removed together with version 1 support. |
 | `resolvers.always_empty` | Entity names whose resolver always returns an empty list here. The tool is **kept** — it works, it just finds nothing — and its description gains a note. |

@@ -694,10 +694,24 @@ base unit.
 | `filters.product_ids` | array | No | Product UUIDs; leaf or group — IN HIERARCHY. |
 | `filters.firm_ids` | array | No | Firm (legal entity) UUIDs from `resolve_firm`. Omit = all firms the key may see. |
 | `filters.channel` | string | No | `retail` or `other`. Omit for both. |
-| `group_by` | array | No | `customer`, `warehouse`, `product`, `product_group`, `firm`, `reason`, `channel`, `document`, `day`, `week`, `month` (default: `customer`, `product`; one period dimension at a time). |
+| `filters.order_ids` | array | No | Customer order UUIDs. **Profile-only** — present where the database lists it in `extra`. |
+| `filters.sale_document_ids` | array | No | Sale document UUIDs (from `find_document` or the `sale_document` dimension). **Profile-only.** |
+| `group_by` | array | No | `customer`, `warehouse`, `product`, `product_group`, `firm`, `reason`, `channel`, `document`, `day`, `week`, `month` (default: `customer`, `product`; one period dimension at a time). Profile-only: `order`, `sale_document`. |
 | `measures` | array | No | `qty`, `amount`, `documents` (default: `qty`, `amount`). |
 | `top` | integer | No | Limit rows. |
 | `sort` | array | No | `[{field, dir}]` (default: `amount` desc). |
+
+**Document cells.** A document dimension (`document`, `order`, `sale_document`) comes as
+`{id, label, type}`, where `type` is `"Document.<Name>"` (the gate passes the response through
+as is). An empty reference has `id` and `type` equal to `""`.
+
+**Link to the sale** (УПП). `order` is the order from the return's header (`Сделка`),
+`sale_document` the sale from its lines (`Товары.ДокументПартии`). `sale_document` is filled only
+for returns entered on the basis of a sale; returns against an order (web orders via `testAPI`),
+manual ones and retail returns in the same shift show «(не указано)» — for them the link to the
+sale is `order` only. "Were there returns for this sale": `find_document(doc_type=РеализацияТоваровУслуг,
+number=…)` → `id` → `returns_report(filters.sale_document_ids=[id], period=…)`. The period must
+cover the **return** dates, not the sale date: returns are selected by their own date.
 
 **УПП 1.3 implementation.** Source: lines of `ВозвратТоваровОтПокупателя` plus negative lines of
 `ОтчетОРозничныхПродажах` (a return made in the same shift as the sale). `retail` is a return

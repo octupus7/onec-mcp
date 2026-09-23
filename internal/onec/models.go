@@ -639,12 +639,18 @@ type ReservesRequest struct {
 
 // ReturnsFilters — отборы отчёта по возвратам. Channel — "retail" | "other"; гейт значение не
 // интерпретирует, допустимость проверяет схема и 1С.
+//
+// OrderIDs / SaleDocumentIDs в общей схеме нет: их добавляет профиль базы (extra.filters).
+// Поле здесь всё равно нужно — отбор, которого нет в структуре, при разборе аргументов
+// молча выпал бы, и 1С вернула бы отчёт без отбора.
 type ReturnsFilters struct {
-	CustomerIDs  []string `json:"customer_ids,omitempty"`
-	WarehouseIDs []string `json:"warehouse_ids,omitempty"`
-	ProductIDs   []string `json:"product_ids,omitempty"`
-	FirmIDs      []string `json:"firm_ids,omitempty"`
-	Channel      string   `json:"channel,omitempty"`
+	CustomerIDs     []string `json:"customer_ids,omitempty"`
+	WarehouseIDs    []string `json:"warehouse_ids,omitempty"`
+	ProductIDs      []string `json:"product_ids,omitempty"`
+	FirmIDs         []string `json:"firm_ids,omitempty"`
+	Channel         string   `json:"channel,omitempty"`
+	OrderIDs        []string `json:"order_ids,omitempty"`
+	SaleDocumentIDs []string `json:"sale_document_ids,omitempty"`
 }
 
 func (f *ReturnsFilters) UnmarshalJSON(data []byte) error {
@@ -770,6 +776,9 @@ type AuthVerifyResponse struct {
 
 // SchemaFacets — грани схемы одного инструмента, которые профиль базы просит вырезать
 // (в unsupported) или добавить (в extra).
+//
+// Filters в extra — массивы UUID (как customer_ids); другой формы гейт добавлять не умеет.
+// Ключ появился в extra без подъёма Version: гейт, который его не знает, просто пропустит.
 type SchemaFacets struct {
 	Params   []string `json:"params,omitempty"`
 	Filters  []string `json:"filters,omitempty"`

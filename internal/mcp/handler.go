@@ -183,7 +183,8 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 	// уже не показывает, но клиент мог получить список, пока профиль был неизвестен (1С
 	// не отвечала), или позвать инструмент в обход списка. Проверка идёт после скоупа, чтобы
 	// ключ без права не узнавал ничего о составе базы.
-	if caps := h.onecClient.Capabilities(r.Context()); !caps.ToolAvailable(params.Name) {
+	caps := h.onecClient.Capabilities(r.Context())
+	if !caps.ToolAvailable(params.Name) {
 		h.logger.Warn("tool.unavailable", "tool", params.Name, "profile", caps.Profile)
 		h.auditToolCall(auth, params.Name, false, "tool_unavailable", started)
 		return NewResponse(req.ID, &CallToolResult{
@@ -217,7 +218,7 @@ func (h *Handler) handleToolsCall(r *http.Request, req Request) *Response {
 	// агент просил sales_report с product_ids, получал выборку по всей базе и читал её
 	// как выборку по одному SKU. Тихо проигнорированный фильтр опаснее отказа — цифры
 	// выглядят правдоподобно, и подмену никто не замечает.
-	if unknown, allowed := unknownFilterKeys(params.Name, params.Arguments); len(unknown) > 0 {
+	if unknown, allowed := unknownFilterKeys(params.Name, params.Arguments, caps); len(unknown) > 0 {
 		h.logger.Warn("tool.filters.unknown",
 			"tool", params.Name, "keys", unknown)
 		h.auditToolCall(auth, params.Name, false, "unknown_filter", started)
@@ -1269,9 +1270,9 @@ func clampDepth(depth flexInt) int {
 // measures может приехать строкой "[\"profit\"]" — тогда его развернёт unstringifyJSON.
 // unknownFilterKeys сверяет ключи filters в теле вызова со схемой инструмента и
 // возвращает те, которых схема не объявляет, вместе со списком поддержанных.
-// Источник истины — та же InputSchema, что уходит клиенту в tools/list, поэтому
-// проверка не может разойтись с объявленным контрактом.
-func unknownFilterKeys(tool string, args any) ([]string, []string) {
+// Источник истины — та же InputSchema, что уходит клиенту в tools/list, уже с профилем
+// базы: отбор из extra.filters проходит, из unsupported — отбивается, как и в списке.
+func unknownFilterKeys(tool string, args any, caps *onec.Capabilities) ([]string, []string) {
 	m, ok := unstringifyJSON(args).(map[string]any)
 	if !ok {
 		return nil, nil
@@ -1282,7 +1283,7 @@ func unknownFilterKeys(tool string, args any) ([]string, []string) {
 		return nil, nil
 	}
 
-	declared := filterProperties(tool)
+	declared := filterProperties(tool, caps)
 	if declared == nil {
 		// Инструмент фильтров не объявляет вовсе — сверять не с чем, пропускаем.
 		return nil, nil
@@ -1307,8 +1308,8 @@ func unknownFilterKeys(tool string, args any) ([]string, []string) {
 
 // filterProperties достаёт properties объекта filters из схемы инструмента.
 // nil означает "инструмент фильтров не объявляет", пустая карта — "объявляет пустой набор".
-func filterProperties(tool string) map[string]any {
-	for _, t := range GetTools() {
+func filterProperties(tool string, caps *onec.Capabilities) map[string]any {
+	for _, t := range applyProfile(GetTools(), caps) {
 		if t.Name != tool {
 			continue
 		}

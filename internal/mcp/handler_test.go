@@ -664,6 +664,10 @@ func fullProfileHealth() string {
 			"profile": "test",
 			"version": onec.CapabilitiesVersion,
 			"tools":   map[string]any{"available": names},
+			// Отборы связи возврата с продажей объявлены только через extra.
+			"extra": map[string]any{
+				ToolReturnsReport: map[string]any{"filters": []string{"order_ids", "sale_document_ids"}},
+			},
 		},
 	})
 
@@ -715,6 +719,9 @@ func TestReturnsReportRequest(t *testing.T) {
 			"warehouse_ids": []string{"wh-1"},
 			"product_ids":   []string{"prod-1"},
 			"channel":       "retail",
+			// Отборы из extra.filters профиля: в структуре они есть, иначе выпали бы при разборе.
+			"order_ids":         []string{"order-1"},
+			"sale_document_ids": []string{"sale-1"},
 		},
 	})
 
@@ -729,7 +736,7 @@ func TestReturnsReportRequest(t *testing.T) {
 		t.Fatalf("filters missing in %v", got.body)
 	}
 
-	for _, key := range []string{"customer_ids", "warehouse_ids", "product_ids"} {
+	for _, key := range []string{"customer_ids", "warehouse_ids", "product_ids", "order_ids", "sale_document_ids"} {
 		if _, ok := filters[key]; !ok {
 			t.Errorf("filter %s did not reach 1C: %v", key, filters)
 		}
@@ -742,5 +749,31 @@ func TestReturnsReportRequest(t *testing.T) {
 	period, _ := got.body["period"].(map[string]any)
 	if period["from"] != "2026-09-01" || period["to"] != "2026-09-17" {
 		t.Errorf("period = %v", got.body["period"])
+	}
+}
+
+// Отбор из extra.filters принимается только там, где профиль его объявил: база без extra
+// отбивает sale_document_ids на входе, как и любой неизвестный фильтр, — иначе отчёт
+// вернулся бы без отбора и выглядел бы как ответ на вопрос.
+func TestExtraFilterRejectedWithoutProfile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp/health" {
+			_, _ = io.WriteString(w, `{"status":"ok","capabilities":{"version":2,"tools":{"available":["returns_report"]}}}`)
+			return
+		}
+		t.Errorf("1C got %s, the call should have been rejected by the gate", r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	client := onec.NewClient(onec.Settings{BaseURL: srv.URL, Timeout: 5 * time.Second}, slog.New(slog.DiscardHandler))
+	h := NewHandler(client, &config.Config{}, "", slog.New(slog.DiscardHandler))
+
+	res := callTool(t, h, ToolReturnsReport, map[string]any{
+		"period":  map[string]any{"from": "2026-09-01", "to": "2026-09-17"},
+		"filters": map[string]any{"sale_document_ids": []string{"sale-1"}},
+	})
+
+	if !res.IsError || len(res.Content) == 0 || !strings.Contains(res.Content[0].Text, "sale_document_ids") {
+		t.Errorf("expected a rejection naming sale_document_ids, got %+v", res)
 	}
 }
